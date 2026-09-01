@@ -30,6 +30,11 @@ services:
       - ./models:/app/models
       # Chat history is written to /app/chat_history and is lost on rebuild otherwise.
       - ./chat_history:/app/chat_history
+    extra_hosts:
+      # Lets the container reach services on the host (ollama, llama.cpp,
+      # LM Studio, GPT-SoVITS). On Linux this mapping is not automatic.
+      # Pair with base_url: http://host.docker.internal:11434/v1 in conf.yaml.
+      - "host.docker.internal:host-gateway"
     environment:
       # run_server.py points HF_HOME/MODELSCOPE_CACHE at ./models already;
       # set HF_ENDPOINT here if you need the mirror (equivalent to --hf_mirror).
