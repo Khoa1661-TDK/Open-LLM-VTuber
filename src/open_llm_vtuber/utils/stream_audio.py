@@ -1,8 +1,20 @@
 import base64
+
+import numpy as np
+import soundfile as sf
 from pydub import AudioSegment
 from pydub.utils import make_chunks
+
 from ..agent.output_types import Actions
 from ..agent.output_types import DisplayText
+
+
+def _normalize(volumes: list) -> list:
+    """Scale per-chunk volumes to 0..1 by the loudest chunk."""
+    max_volume = max(volumes) if volumes else 0
+    if max_volume == 0:
+        raise ValueError("Audio is empty or all zero.")
+    return [volume / max_volume for volume in volumes]
 
 
 def _get_volume_by_chunks(audio: AudioSegment, chunk_length_ms: int) -> list:
@@ -17,11 +29,36 @@ def _get_volume_by_chunks(audio: AudioSegment, chunk_length_ms: int) -> list:
         list: Normalized volumes for each chunk.
     """
     chunks = make_chunks(audio, chunk_length_ms)
-    volumes = [chunk.rms for chunk in chunks]
-    max_volume = max(volumes)
-    if max_volume == 0:
-        raise ValueError("Audio is empty or all zero.")
-    return [volume / max_volume for volume in volumes]
+    return _normalize([chunk.rms for chunk in chunks])
+
+
+def _volumes_from_samples(samples: np.ndarray, frame_rate: int, chunk_length_ms: int):
+    """Per-chunk RMS straight from int16 samples, matching AudioSegment.rms."""
+    if samples.ndim > 1:  # interleave channels the way pydub does
+        samples = samples.reshape(-1)
+    per_chunk = max(1, int(frame_rate * chunk_length_ms / 1000))
+    # Fixed-size slices with a trailing partial chunk, matching make_chunks.
+    chunks = [samples[i : i + per_chunk] for i in range(0, len(samples), per_chunk)]
+    volumes = [
+        float(np.sqrt(np.mean(np.square(c.astype(np.float64))))) if c.size else 0.0
+        for c in chunks
+    ]
+    return _normalize(volumes)
+
+
+def _read_wav_fast(audio_path: str, chunk_length_ms: int):
+    """
+    Fast path for WAV: read the samples once, reuse the file bytes verbatim.
+
+    Avoids pydub's decode + re-export round trip (and the ffmpeg subprocess it
+    shells out to for compressed formats), which measured ~70ms per sentence -
+    more than the local TTS synthesis itself.
+    """
+    samples, frame_rate = sf.read(audio_path, dtype="int16", always_2d=False)
+    volumes = _volumes_from_samples(samples, frame_rate, chunk_length_ms)
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
+    return audio_bytes, volumes
 
 
 def prepare_audio_payload(
@@ -59,15 +96,27 @@ def prepare_audio_payload(
             "forwarded": forwarded,
         }
 
-    try:
-        audio = AudioSegment.from_file(audio_path)
-        audio_bytes = audio.export(format="wav").read()
-    except Exception as e:
-        raise ValueError(
-            f"Error loading or converting generated audio file to wav file '{audio_path}': {e}"
-        )
+    audio_bytes = None
+    volumes = None
+    if audio_path.lower().endswith(".wav"):
+        try:
+            audio_bytes, volumes = _read_wav_fast(audio_path, chunk_length_ms)
+        except ValueError:
+            raise
+        except Exception:
+            audio_bytes = None  # fall through to the pydub path
+
+    if audio_bytes is None:
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            audio_bytes = audio.export(format="wav").read()
+        except Exception as e:
+            raise ValueError(
+                f"Error loading or converting generated audio file to wav file '{audio_path}': {e}"
+            )
+        volumes = _get_volume_by_chunks(audio, chunk_length_ms)
+
     audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
-    volumes = _get_volume_by_chunks(audio, chunk_length_ms)
 
     payload = {
         "type": "audio",

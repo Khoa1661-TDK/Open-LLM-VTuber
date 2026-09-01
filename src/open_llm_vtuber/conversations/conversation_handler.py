@@ -7,6 +7,7 @@ from fastapi import WebSocket
 from loguru import logger
 
 from ..chat_group import ChatGroupManager
+from ..utils.audio_buffer import AudioBuffer
 from ..chat_history_manager import store_message
 from ..service_context import ServiceContext
 from .group_conversation import process_group_conversation
@@ -25,7 +26,7 @@ async def handle_conversation_trigger(
     client_contexts: Dict[str, ServiceContext],
     client_connections: Dict[str, WebSocket],
     chat_group_manager: ChatGroupManager,
-    received_data_buffers: Dict[str, np.ndarray],
+    received_data_buffers: Dict[str, AudioBuffer],
     current_conversation_tasks: Dict[str, Optional[asyncio.Task]],
     broadcast_to_group: Callable,
 ) -> None:
@@ -65,8 +66,7 @@ async def handle_conversation_trigger(
     elif msg_type == "text-input":
         user_input = data.get("text", "")
     else:  # mic-audio-end
-        user_input = received_data_buffers[client_uid]
-        received_data_buffers[client_uid] = np.array([])
+        user_input = received_data_buffers[client_uid].take()
 
     images = data.get("images")
     session_emoji = np.random.choice(EMOJI_LIST)
@@ -96,6 +96,13 @@ async def handle_conversation_trigger(
             )
     else:
         # Use client_uid as task key for individual conversations
+        existing = current_conversation_tasks.get(client_uid)
+        if existing and not existing.done():
+            logger.info(
+                f"Conversation already running for {client_uid}; ignoring new trigger"
+            )
+            return
+
         current_conversation_tasks[client_uid] = asyncio.create_task(
             process_single_conversation(
                 context=context,
@@ -119,6 +126,10 @@ async def handle_individual_interrupt(
         task = current_conversation_tasks[client_uid]
         if task and not task.done():
             task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
             logger.info("🛑 Conversation task was successfully interrupted")
 
         try:

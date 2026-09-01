@@ -140,7 +140,11 @@ class TTSTaskManager:
         audio_file_path = None
         try:
             audio_file_path = await self._generate_audio(tts_engine, tts_text)
-            payload = prepare_audio_payload(
+            # Payload prep decodes the file and base64s it. Cheap for WAV, but
+            # the pydub fallback shells out to ffmpeg for compressed formats -
+            # keep it off the event loop either way.
+            payload = await asyncio.to_thread(
+                prepare_audio_payload,
                 audio_path=audio_file_path,
                 display_text=display_text,
                 actions=actions,

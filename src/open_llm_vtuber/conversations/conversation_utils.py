@@ -15,6 +15,10 @@ from ..live2d_model import Live2dModel
 from ..tts.tts_interface import TTSInterface
 from ..utils.stream_audio import prepare_audio_payload
 
+# Upper bound on waiting for the client to report playback finished. Without a
+# bound a dropped frontend message pins the turn's task forever.
+PLAYBACK_COMPLETE_TIMEOUT = 120.0
+
 
 # Convert class methods to standalone functions
 def create_batch_input(
@@ -171,7 +175,9 @@ async def finalize_conversation_turn(
         await websocket_send(json.dumps({"type": "backend-synth-complete"}))
 
         response = await message_handler.wait_for_response(
-            client_uid, "frontend-playback-complete"
+            client_uid,
+            "frontend-playback-complete",
+            timeout=PLAYBACK_COMPLETE_TIMEOUT,
         )
 
         if not response:

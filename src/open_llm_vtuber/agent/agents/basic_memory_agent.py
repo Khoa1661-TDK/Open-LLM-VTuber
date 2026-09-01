@@ -584,7 +584,7 @@ class BasicMemoryAgent(AgentInterface):
         """Create the chat pipeline function."""
 
         @tts_filter(self._tts_preprocessor_config)
-        @display_processor()
+        @display_processor(self._live2d_model)
         @actions_extractor(self._live2d_model)
         @sentence_divider(
             faster_first_response=self._faster_first_response,

@@ -100,9 +100,14 @@ def actions_extractor(live2d_model: Live2dModel):
     return decorator
 
 
-def display_processor():
+def display_processor(live2d_model: Live2dModel = None):
     """
     Decorator that processes text for display, passing through dicts.
+
+    Args:
+        live2d_model: when given, [emotion] keywords are stripped from the
+            displayed text. They still drive expressions via actions_extractor,
+            but users should not see them in subtitles.
     """
 
     def decorator(
@@ -131,14 +136,25 @@ def display_processor():
                 ):
                     sentence, actions = item
                     text = sentence.text
+                    is_think_marker = False
                     # Handle think tag states
                     for tag in sentence.tags:
                         if tag.name == "think":
                             if tag.state == TagState.START:
                                 text = "("
+                                is_think_marker = True
                             elif tag.state == TagState.END:
                                 text = ")"
+                                is_think_marker = True
 
+                    if live2d_model is not None:
+                        text = live2d_model.remove_emotion_keywords(text)
+                    # Every segment is stripped by the divider, so the client
+                    # concatenating them produced "Hey there,human!". Re-add the
+                    # separator the split removed. Think-tag markers are joined
+                    # tight on purpose, so they are left alone.
+                    if text and not is_think_marker and not text[-1].isspace():
+                        text += " "
                     display = DisplayText(text=text)  # Simplified DisplayText creation
                     yield sentence, display, actions  # Yield the tuple
                 elif isinstance(item, dict):

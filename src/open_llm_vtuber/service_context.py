@@ -493,10 +493,14 @@ class ServiceContext:
             else:
                 # Load alternative config and merge with base config
                 characters_dir = self.system_config.config_alts_dir
-                file_path = os.path.normpath(
+                # startswith() on the raw string let sibling dirs through
+                # (e.g. "characters/../characters_evil/x.yaml"). Compare
+                # resolved paths instead.
+                base = os.path.realpath(characters_dir)
+                file_path = os.path.realpath(
                     os.path.join(characters_dir, config_file_name)
                 )
-                if not file_path.startswith(characters_dir):
+                if os.path.commonpath([base, file_path]) != base:
                     raise ValueError("Invalid configuration file path")
 
                 alt_config_data = read_yaml(file_path).get("character_config")
